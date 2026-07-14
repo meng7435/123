@@ -1,0 +1,6 @@
+2026-07-13 11:40:36.0924 - WARNING - graphrag.query.context_builder.community_context - Warning: No community records added when building community context.
+2026-07-13 11:40:36.0947 - WARNING - graphrag.query.structured_search.local_search.mixed_context - Reached token limit - reverting to previous context state
+2026-07-13 11:48:59.0625 - WARNING - graphrag.query.context_builder.community_context - Warning: No community records added when building community context.
+2026-07-13 11:48:59.0664 - WARNING - graphrag.query.structured_search.local_search.mixed_context - Reached token limit - reverting to previous context state
+2026-07-14 10:01:19.0206 - WARNING - graphrag.query.context_builder.community_context - Warning: No community records added when building community context.
+2026-07-14 10:01:19.0218 - WARNING - graphrag.query.structured_search.local_search.mixed_context - Reached token limit - reverting to previous context state
