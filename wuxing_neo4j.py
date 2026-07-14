@@ -3,7 +3,7 @@ from neo4j import GraphDatabase, exceptions
 # ===================== 配置区 =====================
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "你的数据库密码"  # 修改为自己Neo4j密码
+NEO4J_PASSWORD = "ymf7435.."  # 修改为自己Neo4j密码
 DATABASE_NAME = "neo4j"
 
 # 1-12数字完整结构化数据（源自文档拆解）
@@ -308,7 +308,7 @@ number_data = [
             "人体": ["口", "舌", "咽喉", "牙齿", "肺部", "气管", "右肋", "肛门", "呼吸系统"],
             "疾病": ["口腔咽喉疾病", "咳喘肺病", "贫血低血压", "外伤刀伤", "皮肤病", "手术破损", "破相", "膀胱病症"],
             "天象": ["小雨露水", "湿润天气", "新月星辰", "低气压", "短期多变气象"],
-            "animal": ["羊", "猿猴", "兔子", "泽中水生生物", "温顺灵秀兽类"],
+            "动物": ["羊", "猿猴", "兔子", "泽中水生生物", "温顺灵秀兽类"],
             "物象": ["原生金属", "矿石原料", "钱币", "刀剑剪刀", "开口器物", "乐器", "食品餐具", "装饰五金", "修整破损器物", "精致小件物品"],
             "场所": ["湖泽洼地", "音乐厅", "餐饮店", "演出场馆", "社交场所", "路口商圈", "废品修整场地", "金融小微网点"]
         },
@@ -383,6 +383,9 @@ number_data = [
 ]
 
 # ===================== 数据库操作类 =====================
+from neo4j import GraphDatabase, exceptions
+
+# ===================== 数据库操作类 =====================
 class NumberGuaNeo4jLoader:
     def __init__(self, uri, user, password, db_name):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
@@ -392,15 +395,18 @@ class NumberGuaNeo4jLoader:
         self.driver.close()
 
     def create_index(self):
-        """创建唯一索引，防止重复节点"""
+        """适配Neo4j 5.x 标准约束语法"""
         index_sqls = [
-            "CREATE CONSTRAINT IF NOT EXISTS idx_number_num FOR (n:Number) REQUIRE n.num IS UNIQUE;",
-            "CREATE CONSTRAINT IF NOT EXISTS idx_image_cat FOR (c:ImageCategory) REQUIRE c.category IS UNIQUE;"
+            "CREATE CONSTRAINT idx_number_num FOR (n:Number) REQUIRE n.num IS UNIQUE;"
         ]
         with self.driver.session(database=self.db_name) as session:
             for sql in index_sqls:
-                session.run(sql)
-        print("索引创建完成")
+                try:
+                    session.run(sql)
+                except Exception as e:
+                    # 如果约束已存在会抛错，忽略即可
+                    print(f"约束已存在或无需创建: {e}")
+        print("索引/约束处理完成")
 
     def clear_all_data(self):
         """清空库内所有数据（测试用，正式环境可注释）"""
@@ -409,7 +415,7 @@ class NumberGuaNeo4jLoader:
         print("数据库已清空")
 
     def insert_number_node(self, data):
-        """插入数字主节点 Number"""
+        """插入数字主节点 Number，万物类象全部作为节点属性"""
         cypher = """
         MERGE (n:Number{num:$num})
         SET n.name = $name,
@@ -421,9 +427,20 @@ class NumberGuaNeo4jLoader:
             n.season_time = $season_time,
             n.wuwei = $wuwei,
             n.element_meaning = $element_meaning,
-            n.num_meaning = $num_meaning
+            n.num_meaning = $num_meaning,
+            n.base_image = $base_image,
+            n.general_image = $general_image,
+            n.person = $person,
+            n.character = $character,
+            n.body = $body,
+            n.disease = $disease,
+            n.weather = $weather,
+            n.animal = $animal,
+            n.object = $object,
+            n.place = $place
         RETURN n;
         """
+        images = data["images"]
         params = {
             "num": data["num"],
             "name": data["name"],
@@ -435,77 +452,72 @@ class NumberGuaNeo4jLoader:
             "season_time": data["season_time"],
             "wuwei": data["wuwei"],
             "element_meaning": data["element_meaning"],
-            "num_meaning": data["num_meaning"]
+            "num_meaning": data["num_meaning"],
+            # 拆分images字典到独立属性
+            "base_image": images["基础卦象"],
+            "general_image": images["通用象意"],
+            "person": images["人物"],
+            "character": images["性格"],
+            "body": images["人体"],
+            "disease": images["疾病"],
+            "weather": images["天象"],
+            "animal": images["动物"],
+            "object": images["物象"],
+            "place": images["场所"]
         }
         with self.driver.session(database=self.db_name) as session:
             res = session.run(cypher, params)
             record = res.single()
+            print(f"数字{data['num']} 节点入库完成")
             return record["n"] if record else None
 
-    def insert_image_category_and_rel(self, num, image_dict):
-        """插入万物类象分类节点 + 数字关联关系HAS_IMAGE"""
-        cypher = """
-        MATCH (n:Number{num:$num})
-        MERGE (cat:ImageCategory{category:$cat_name})
-        SET cat.items = $items
-        MERGE (n)-[:HAS_IMAGE]->(cat)
-        RETURN cat;
-        """
-        with self.driver.session(database=self.db_name) as session:
-            for cat_name, items in image_dict.items():
-                session.run(cypher, {"num": num, "cat_name": cat_name, "items": items})
-        print(f"数字{num} 万物类象入库完成")
-
     def build_rule_relation(self, data):
-        """构建相生、相克、六冲、相绝关系"""
         num = data["num"]
-        # 相生 GENERATE
-        for target in data["generate"]:
-            cypher = """
-            MATCH (a:Number{num:$a}), (b:Number{num:$b})
-            MERGE (a)-[:GENERATE]->(b);
-            """
-            with self.driver.session(database=self.db_name) as s:
+        with self.driver.session(database=self.db_name) as s:
+            # 相生 sheng
+            for target in data["generate"]:
+                cypher = """
+                MATCH (a:Number{num:$a}), (b:Number{num:$b})
+                MERGE (a)-[:sheng]->(b);
+                """
                 s.run(cypher, {"a": num, "b": target})
-        # 相克 RESTRAIN
-        for target in data["restrain"]:
-            cypher = """
-            MATCH (a:Number{num:$a}), (b:Number{num:$b})
-            MERGE (a)-[:RESTRAIN]->(b);
-            """
-            with self.driver.session(database=self.db_name) as s:
+            # 相克 ke
+            for target in data["restrain"]:
+                cypher = """
+                MATCH (a:Number{num:$a}), (b:Number{num:$b})
+                MERGE (a)-[:ke]->(b);
+                """
                 s.run(cypher, {"a": num, "b": target})
-        # 六冲 CLASH
-        for target in data["clash"]:
-            cypher = """
-            MATCH (a:Number{num:$a}), (b:Number{num:$b})
-            MERGE (a)-[:CLASH]->(b);
-            MERGE (b)-[:CLASH]->(a);
-            """
-            with self.driver.session(database=self.db_name) as s:
-                s.run(cypher, {"a": num, "b": target})
-        # 相绝 CUT_OFF
-        for target in data["cut_off"]:
-            cypher = """
-            MATCH (a:Number{num:$a}), (b:Number{num:$b})
-            MERGE (a)-[:CUT_OFF]->(b);
-            """
-            with self.driver.session(database=self.db_name) as s:
+            # 六冲 chong 双向关系
+            for target in data["clash"]:
+                cypher1 = """
+                MATCH (a:Number{num:$a}), (b:Number{num:$b})
+                MERGE (a)-[:chong]->(b);
+                """
+                cypher2 = """
+                MATCH (a:Number{num:$a}), (b:Number{num:$b})
+                MERGE (b)-[:chong]->(a);
+                """
+                s.run(cypher1, {"a": num, "b": target})
+                s.run(cypher2, {"a": num, "b": target})
+            # 相绝 jue 单向关系
+            for target in data["cut_off"]:
+                cypher = """
+                MATCH (a:Number{num:$a}), (b:Number{num:$b})
+                MERGE (a)-[:jue]->(b);
+                """
                 s.run(cypher, {"a": num, "b": target})
         print(f"数字{num} 五行规则关系构建完成")
 
     def full_load_all(self, data_list):
-        """全量入库主流程"""
+        """全量入库主流程：不再创建类象节点"""
         self.create_index()
         # 可选清空
         # self.clear_all_data()
-        # 1. 插入所有数字节点
+        # 1. 插入所有数字节点（类象全部存为节点属性）
         for item in data_list:
             self.insert_number_node(item)
-        # 2. 插入万物类象分类与关系
-        for item in data_list:
-            self.insert_image_category_and_rel(item["num"], item["images"])
-        # 3. 构建生克冲绝关系
+        # 2. 构建生、克、冲、绝关系
         for item in data_list:
             self.build_rule_relation(item)
         print("===== 全部1-12数字卦理数据入库完成 =====")
